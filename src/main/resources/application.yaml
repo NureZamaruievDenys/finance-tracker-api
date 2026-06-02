@@ -1,0 +1,35 @@
+spring:
+  application:
+    name: finance-tracker-api
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/finance_db
+    username: postgres
+    password: 1
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+
+# НАШ КАСТОМНИЙ ШЛЯХ ДЛЯ GOOGLE (щоб не конфліктувало зі Spring Security)
+app:
+  google:
+    client-id: 800664777576-nlsnpa73ha83uf4bvtskoph0veh9vent.apps.googleusercontent.com
+
+# ai дійсно зсунуто до самого лівого краю, це правильно!
+ai:
+  api:
+    url: https://generativelanguage.googleapis.com/v1beta/models/gemma-4-26b-a4b-it:generateContent
+    key: AIzaSyAyrO0QWa8QFVW7X4rworgevy8dHcsl83g
+
+jwt:
+  secret: 404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970
+  expiration: 86400000
+
+server:
+  forward-headers-strategy: framework
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
