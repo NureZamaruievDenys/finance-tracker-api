@@ -3,9 +3,9 @@ spring:
     name: finance-tracker-api
 
   datasource:
-    url: jdbc:postgresql://localhost:5432/finance_db
-    username: postgres
-    password: 1
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/finance_db}
+    username: ${SPRING_DATASOURCE_USERNAME:postgres}
+    password: ${SPRING_DATASOURCE_PASSWORD:1}
 
   jpa:
     hibernate:
