@@ -12,9 +12,9 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 @Service
 @RequiredArgsConstructor
@@ -24,7 +24,6 @@ public class MonobankService {
     private final WebClient.Builder webClientBuilder;
 
     public String syncTransactions(Long userId, String monoToken) {
-        // 1. Отримуємо інформацію про клієнта та його рахунки
         String infoUrl = "https://api.monobank.ua/personal/client-info";
         Map<String, Object> clientInfo;
 
@@ -52,71 +51,72 @@ public class MonobankService {
         List<Map<String, Object>> accounts = (List<Map<String, Object>>) clientInfo.get("accounts");
 
         long timeTo = Instant.now().getEpochSecond();
-        long timeFrom = Instant.now().minus(30, ChronoUnit.DAYS).getEpochSecond();
+        long timeFrom = Instant.now().minus(30, ChronoUnit.DAYS).getEpochSecond(); 
 
-        int totalDownloaded = 0;
-        List<String> errors = new ArrayList<>();
+        CompletableFuture.runAsync(() -> {
+            for (int i = 0; i < accounts.size(); i++) {
+                Map<String, Object> account = accounts.get(i);
+                String accountId = account.get("id").toString();
 
-        for (Map<String, Object> account : accounts) {
-            String accountId = account.get("id").toString();
+                String statementUrl = String.format("https://api.monobank.ua/personal/statement/%s/%d/%d", accountId, timeFrom, timeTo);
 
-            if (account.containsKey("currencyCode") && account.get("currencyCode") == null) {
-                continue;
-            }
+                try {
+                    List<Map<String, Object>> statements = webClientBuilder.build()
+                            .get()
+                            .uri(statementUrl)
+                            .header("X-Token", monoToken)
+                            .retrieve()
+                            .bodyToFlux(new ParameterizedTypeReference<Map<String, Object>>() {})
+                            .collectList()
+                            .block();
 
-            String statementUrl = String.format("https://api.monobank.ua/personal/statement/%s/%d/%d", accountId, timeFrom, timeTo);
+                    if (statements != null && !statements.isEmpty()) {
+                        for (Map<String, Object> stmt : statements) {
+                            String bankId = stmt.get("id").toString();
 
-            try {
-                List<Map<String, Object>> statements = webClientBuilder.build()
-                        .get()
-                        .uri(statementUrl)
-                        .header("X-Token", monoToken)
-                        .retrieve()
-                        .bodyToFlux(new ParameterizedTypeReference<Map<String, Object>>() {})
-                        .collectList()
-                        .block();
+                            if (transactionRepository.existsByExternalId(bankId)) continue;
 
-                if (statements != null && !statements.isEmpty()) {
-                    for (Map<String, Object> stmt : statements) {
-                        String bankId = stmt.get("id").toString();
+                            Transaction tx = new Transaction();
+                            tx.setUserId(userId);
+                            tx.setExternalId(bankId);
+                            tx.setSource("MONOBANK");
 
-                        if (transactionRepository.existsByExternalId(bankId)) {
-                            continue;
+                            int amount = (Integer) stmt.get("amount");
+                            tx.setAmount(BigDecimal.valueOf(Math.abs(amount / 100.0)));
+                            tx.setType(amount > 0 ? "INCOME" : "EXPENSE");
+
+                            if (stmt.containsKey("description") && stmt.get("description") != null) {
+                                tx.setDescription(stmt.get("description").toString());
+                            } else {
+                                tx.setDescription("Транзакція Monobank");
+                            }
+                            tx.setCategory("Монобанк");
+                            tx.setPaymentMethod("card");
+
+                            long time = ((Number) stmt.get("time")).longValue();
+                            LocalDate date = Instant.ofEpochSecond(time).atZone(ZoneId.systemDefault()).toLocalDate();
+                            tx.setTransactionDate(date);
+
+                            transactionRepository.save(tx);
                         }
-
-                        Transaction tx = new Transaction();
-                        tx.setUserId(userId);
-                        tx.setExternalId(bankId);
-                        tx.setSource("MONOBANK");
-
-                        int amount = (Integer) stmt.get("amount");
-                        tx.setAmount(BigDecimal.valueOf(Math.abs(amount / 100.0)));
-                        tx.setType(amount > 0 ? "INCOME" : "EXPENSE");
-
-                        tx.setCategory(stmt.get("description").toString());
-
-                        long time = ((Number) stmt.get("time")).longValue();
-                        LocalDate date = Instant.ofEpochSecond(time).atZone(ZoneId.systemDefault()).toLocalDate();
-                        tx.setTransactionDate(date);
-
-                        transactionRepository.save(tx);
-                        totalDownloaded++;
                     }
+                } catch (Exception e) {
+                    System.err.println("Помилка рахунку " + accountId + ": " + e.getMessage());
                 }
 
-                Thread.sleep(500);
-
-            } catch (org.springframework.web.reactive.function.client.WebClientResponseException.TooManyRequests e) {
-                errors.add("Перевищено ліміт запитів при зчитуванні карток.");
-            } catch (Exception e) {
-                errors.add(accountId + ": " + e.getMessage());
+                if (i < accounts.size() - 1) {
+                    try {
+                        Thread.sleep(61000); 
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
             }
-        }
+        });
 
-        String responseMessage = "Синхронізація завершена. Додано нових транзакцій: " + totalDownloaded;
-        if (!errors.isEmpty()) {
-            responseMessage += " (Помилки з деякими рахунками: " + errors.size() + ")";
-        }
-        return responseMessage;
+        int expectedMinutes = accounts.size() - 1;
+        if (expectedMinutes <= 0) expectedMinutes = 1;
+
+        return "Синхронізацію всіх карток запущено! Дані з'являтимуться поступово протягом " + expectedMinutes + " хв.";
     }
 }
